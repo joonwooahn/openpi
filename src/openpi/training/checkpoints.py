@@ -79,7 +79,9 @@ def save_state(
         "train_state": train_state,
         "params": {"params": params},
     }
-    checkpoint_manager.save(step, items)
+    # checkpoint_manager.save(step, items)
+    # wait_until_finished=True 옵션을 추가하여 동기식으로 저장합니다.
+    checkpoint_manager.save(step, items, wait_until_finished=True) ### david add !!!
 
 
 def restore_state(

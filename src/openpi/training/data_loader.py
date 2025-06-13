@@ -89,14 +89,13 @@ def create_dataset(data_config: _config.DataConfig, model_config: _model.BaseMod
     if repo_id == "fake":
         return FakeDataset(model_config, num_samples=1024)
 
-    dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id, local_files_only=data_config.local_files_only)
+    dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
     dataset = lerobot_dataset.LeRobotDataset(
         data_config.repo_id,
         delta_timestamps={
             key: [t / dataset_meta.fps for t in range(model_config.action_horizon)]
             for key in data_config.action_sequence_keys
         },
-        local_files_only=data_config.local_files_only,
     )
 
     if data_config.prompt_from_task:
@@ -104,7 +103,31 @@ def create_dataset(data_config: _config.DataConfig, model_config: _model.BaseMod
 
     return dataset
 
+##### 기존 버젼, 그러나 최신 lerobot에 안먹힘
+# def create_dataset(data_config: _config.DataConfig, model_config: _model.BaseModelConfig) -> Dataset:
+#     """Create a dataset for training."""
+#     repo_id = data_config.repo_id
+#     if repo_id is None:
+#         raise ValueError("Repo ID is not set. Cannot create dataset.")
+#     if repo_id == "fake":
+#         return FakeDataset(model_config, num_samples=1024)
 
+#     dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id, local_files_only=data_config.local_files_only)
+#     dataset = lerobot_dataset.LeRobotDataset(
+#         data_config.repo_id,
+#         delta_timestamps={
+#             key: [t / dataset_meta.fps for t in range(model_config.action_horizon)]
+#             for key in data_config.action_sequence_keys
+#         },
+#         local_files_only=data_config.local_files_only,
+#     )
+
+#     if data_config.prompt_from_task:
+#         dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
+
+#     return dataset
+
+##### 새 버젼, 최신 (2025/06/06 기준) 버젼이 먹힘
 def transform_dataset(dataset: Dataset, data_config: _config.DataConfig, *, skip_norm_stats: bool = False) -> Dataset:
     """Transform the dataset by applying the data transforms."""
     norm_stats = {}

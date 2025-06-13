@@ -37,7 +37,14 @@ class PaligemmaTokenizer:
 
 
 class FASTTokenizer:
-    def __init__(self, max_len: int = 256, fast_tokenizer_path: str = "physical-intelligence/fast"):
+###################### 기존 256 이나, allex 로봇에서 token이 max_len을 넘어가서 훈련에 영향을 줘서 384로 늘림, 너무 늘리면 GPU 메모리 오류남
+    # def __init__(self, max_len: int = 256, fast_tokenizer_path: str = "physical-intelligence/fast"):
+    # def __init__(self, max_len: int = 512, fast_tokenizer_path: str = "physical-intelligence/fast"):
+    def __init__(self, max_len: int = 384, fast_tokenizer_path: str = "physical-intelligence/fast"):
+    # def __init__(self, max_len: int = 320, fast_tokenizer_path: str = "physical-intelligence/fast"):
+    # def __init__(self, max_len: int = 336, fast_tokenizer_path: str = "physical-intelligence/fast"):
+    # def __init__(self, max_len: int = 340, fast_tokenizer_path: str = "physical-intelligence/fast"):
+        # print('\n\n======================max_len:', max_len, '\n\n')
         self._max_len = max_len
 
         # Download base PaliGemma tokenizer
@@ -71,7 +78,8 @@ class FASTTokenizer:
             postfix_tokens = (
                 self._paligemma_tokenizer.encode("Action: ")
                 + action_tokens_in_pg.tolist()
-                + self._paligemma_tokenizer.encode("|")
+                # + self._paligemma_tokenizer.encode("|")
+                + self._paligemma_tokenizer.encode("|", add_eos=True)
             )
         else:
             postfix_tokens = []

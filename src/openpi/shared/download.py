@@ -20,6 +20,9 @@ import s3transfer.futures as s3_transfer_futures
 import tqdm_loggable.auto as tqdm
 from types_boto3_s3.service_resource import ObjectSummary
 
+### david add !!!
+from datetime import timezone # 이 부분을 추가하거나 확인
+
 # Environment variable to control cache directory path, ~/.cache/openpi will be used by default.
 _OPENPI_DATA_HOME = "OPENPI_DATA_HOME"
 
@@ -302,7 +305,8 @@ def _is_openpi_url(url: str) -> bool:
 
 def _get_mtime(year: int, month: int, day: int) -> float:
     """Get the mtime of a given date at midnight UTC."""
-    date = datetime.datetime(year, month, day, tzinfo=datetime.UTC)
+    # date = datetime.datetime(year, month, day, tzinfo=datetime.UTC)
+    date = datetime.datetime(year, month, day, tzinfo=timezone.utc) ### david add !!!
     return time.mktime(date.timetuple())
 
 

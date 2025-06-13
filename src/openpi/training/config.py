@@ -30,6 +30,17 @@ ModelType: TypeAlias = _model.ModelType
 # Work around a tyro issue with using nnx.filterlib.Filter directly.
 Filter: TypeAlias = nnx.filterlib.Filter
 
+### david add !!!
+import openpi.transforms_david as _transforms_david
+import json, pathlib # norm_stats 파일을 읽기 위해 json 모듈 임포트
+from typing import Dict, Optional, Tuple # Dict는 typing 모듈에서 가져옵니다.  
+import numpy as np  
+import os
+
+ACTION_CHUNK_HORIZON = 50
+BATCH_SIZE = 16
+CHECKPOINT_BASE_DIR  = "./checkpoints/chunk_50"
+### david add !!!
 
 @dataclasses.dataclass(frozen=True)
 class AssetsConfig:
@@ -95,46 +106,7 @@ class GroupFactory(Protocol):
     def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
         """Create a group."""
 
-
-@dataclasses.dataclass(frozen=True)
-class ModelTransformFactory(GroupFactory):
-    """Creates model transforms for standard pi0 models."""
-
-    # If provided, will determine the default prompt that be used by the model.
-    default_prompt: str | None = None
-
-    def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
-        match model_config.model_type:
-            case _model.ModelType.PI0:
-                return _transforms.Group(
-                    inputs=[
-                        _transforms.InjectDefaultPrompt(self.default_prompt),
-                        _transforms.ResizeImages(224, 224),
-                        _transforms.TokenizePrompt(
-                            _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
-                        ),
-                    ],
-                )
-            case _model.ModelType.PI0_FAST:
-                return _transforms.Group(
-                    inputs=[
-                        _transforms.InjectDefaultPrompt(self.default_prompt),
-                        _transforms.ResizeImages(224, 224),
-                        _transforms.TokenizeFASTInputs(
-                            _tokenizer.FASTTokenizer(model_config.max_token_len),
-                        ),
-                    ],
-                    outputs=[
-                        _transforms.ExtractFASTActions(
-                            _tokenizer.FASTTokenizer(model_config.max_token_len),
-                            action_horizon=model_config.action_horizon,
-                            action_dim=model_config.action_dim,
-                        )
-                    ],
-                )
-
-
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True) # david move!!! 이 함수를 DataCMyCustomLeRobotDataConfig위로 이동
 class DataConfigFactory(abc.ABC):
     # The LeRobot repo id.
     repo_id: str = tyro.MISSING
@@ -168,6 +140,43 @@ class DataConfigFactory(abc.ABC):
         except FileNotFoundError:
             logging.info(f"Norm stats not found in {data_assets_dir}, skipping.")
         return None
+
+@dataclasses.dataclass(frozen=True)
+class ModelTransformFactory(GroupFactory):
+    """Creates model transforms for standard pi0 models."""
+
+    # If provided, will determine the default prompt that be used by the model.
+    default_prompt: str | None = None
+
+    def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
+        match model_config.model_type:
+            case _model.ModelType.PI0:
+                return _transforms.Group(
+                    inputs=[
+                        _transforms.InjectDefaultPrompt(self.default_prompt),
+                        _transforms.ResizeImages(224, 224),
+                        _transforms.TokenizePrompt(
+                            _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                        ),
+                    ],
+                )
+            case _model.ModelType.PI0_FAST:
+                return _transforms.Group(
+                    inputs=[
+                        _transforms.InjectDefaultPrompt(self.default_prompt),
+                        _transforms.ResizeImages(224, 224),
+                        _transforms.TokenizeFASTInputs(
+                            _tokenizer.FASTTokenizer(max_len=model_config.max_token_len),
+                        ),
+                    ],
+                    outputs=[
+                        _transforms.ExtractFASTActions(
+                            _tokenizer.FASTTokenizer(max_len=model_config.max_token_len),
+                            action_horizon=model_config.action_horizon,
+                            action_dim=model_config.action_dim,
+                        )
+                    ],
+                )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -322,6 +331,37 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
             model_transforms=model_transforms,
         )
 
+### david add !!!
+@dataclasses.dataclass(frozen=True)
+class MyCustomLeRobotDataConfig(DataConfigFactory): # DataConfigFactory 상속 유지 (create_base_config 사용 위함)
+    repo_id: str | None = None
+    local_files_only: bool = True
+    prompt_from_task: bool = False
+    
+    action_sequence_keys: Tuple[str, ...] = ("action",) # <--- 여기를 ("actions",)에서 ("action",)으로 수정
+
+    repack_transforms_custom: _transforms.Group = dataclasses.field(default_factory=lambda: _transforms.Group(inputs=[], outputs=[]))
+    data_transforms_custom: _transforms.Group = dataclasses.field(default_factory=lambda: _transforms.Group(inputs=[], outputs=[]))
+    model_transforms_custom: _transforms.Group = dataclasses.field(default_factory=lambda: _transforms.Group(inputs=[], outputs=[]))
+    
+    # create 메서드를 부모의 기능을 활용하도록 수정합니다.
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # 이 메서드는 self.assets (AssetsConfig)를 사용하여 norm_stats를 로드합니다.
+        data_config = self.create_base_config(assets_dirs)
+
+        # 2. 부모가 만든 기본 DataConfig에 우리의 커스텀 설정을 덮어씁니다.
+        return dataclasses.replace(
+            data_config,
+            repack_transforms=self.repack_transforms_custom,
+            data_transforms=self.data_transforms_custom,
+            model_transforms=self.model_transforms_custom,
+            # 기타 필요한 필드들도 여기서 다시 설정해줄 수 있습니다.
+            repo_id=self.repo_id,
+            action_sequence_keys=self.action_sequence_keys,
+            # PI0-FAST 모델은 보통 quantile 정규화를 사용합니다.
+            use_quantile_norm=(model_config.model_type == ModelType.PI0_FAST)
+        )
+### david add !!!
 
 @dataclasses.dataclass(frozen=True)
 class TrainConfig:
@@ -353,24 +393,36 @@ class TrainConfig:
     # Base directory for config assets (e.g., norm stats).
     assets_base_dir: str = "./assets"
     # Base directory for checkpoints.
-    checkpoint_base_dir: str = "./checkpoints"
-
+    # checkpoint_base_dir: str = "./checkpoints"    
+    # checkpoint_base_dir: str = f"/tmp/{os.environ.get('USER')}/checkpoints"  ### david add
+    checkpoint_base_dir: str = CHECKPOINT_BASE_DIR
+    print('================checkpoint_base_dir :', checkpoint_base_dir)
+    
     # Random seed that will be used by random generators during training.
     seed: int = 42
+
     # Global batch size.
-    batch_size: int = 32
+    # batch_size: int = 32
+    batch_size: int = BATCH_SIZE ### david add !!!
+    print('================batch_size: ', batch_size)
+    
     # Number of workers to use for the data loader. Increasing this number will speed up data loading but
     # will increase memory and CPU usage.
-    num_workers: int = 2
+    # num_workers: int = 2
+    num_workers: int = 8
     # Number of train steps (batches) to run.
     num_train_steps: int = 30_000
 
     # How often (in steps) to log training metrics.
     log_interval: int = 100
     # How often (in steps) to save checkpoints.
-    save_interval: int = 1000
+    # save_interval: int = 1000
+    save_interval: int = 5000   ### david add !!!
+    print('================checkpoint save_interval: ', save_interval)
+    
     # If set, any existing checkpoints matching step % keep_period == 0 will not be deleted.
-    keep_period: int | None = 5000
+    # keep_period: int | None = 5000
+    keep_period: int | None = 10000
 
     # If true, will overwrite the checkpoint directory if it already exists.
     overwrite: bool = False
@@ -410,9 +462,624 @@ class TrainConfig:
         if self.resume and self.overwrite:
             raise ValueError("Cannot resume and overwrite at the same time.")
 
+### david add !!!
+######## gr1
+indices_for_gr1_state = list(range(13)) + list(range(20, 31))
+# print('\n\n-====================indices_for_gr1_state', indices_for_gr1_state)
+# print(f"('-====================선택된 state 인덱스 개수: {len(indices_for_gr1_state)}")
+
+indices_for_gr1_action = (0, 1, 2, 3, 4, 5, 12, 13, 14, 15, 16, 17)
+# print('\n\n-====================indices_for_gr1_action', indices_for_gr1_action)
+# print(f"('-====================선택된 action 인덱스 개수: {len(indices_for_gr1_action)}")
+
+# _pi0_fast_rlwrld_gr1_model_config 정의 (이전과 동일)
+_pi0_fast_rlwrld_gr1_model_config = pi0_fast.Pi0FASTConfig(
+    action_dim=len(indices_for_gr1_action),  # 예: 6개의 조인트 + 6개의 그리퍼 액션
+        # 0: "right_delta_x",
+        # 1: "right_delta_y",
+        # 2: "right_delta_z",
+        # 3: "right_delta_theta_x",
+        # 4: "right_delta_theta_y",
+        # 5: "right_delta_theta_z",
+        # 12: "right_thumb_proximal_yaw_joint_drive",
+        # 13: "right_thumb_proximal_pitch_joint_drive",
+        # 14: "right_index_proximal_joint_drive",
+        # 15: "right_middle_proximal_joint_drive",
+        # 16: "right_ring_proximal_joint_drive",
+        # 17: "right_pinky_proximal_joint_drive",
+    action_horizon=ACTION_CHUNK_HORIZON,
+    max_token_len=512, 
+)
+
+_pi0_fast_rlwrld_gr1_model_config_for_finetune = pi0_fast.Pi0FASTConfig(
+    action_dim=len(indices_for_gr1_action),  # 예: 6개의 조인트 + 6개의 그리퍼 액션\
+    action_horizon=ACTION_CHUNK_HORIZON,
+    max_token_len=512,
+    paligemma_variant="gemma_2b_lora"
+)
+
+### allex
+indices_for_allex_state = list(range(4)) + list(range(6, 13)) + list(range(20, 40)) # 11 + 20 = 31
+# print('\n\n-====================indices_for_allex_state', indices_for_allex_state)
+# print(f"('-====================선택된 state 인덱스 개수: {len(indices_for_allex_state)}")
+
+indices_for_allex_action = (0, 1, 2, 3, 4, 5, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26)
+# print('\n\n-====================indices_for_allex_action', indices_for_allex_action)
+# print(f"('-====================선택된 action 인덱스 개수: {len(indices_for_allex_action)}")
+
+_pi0_fast_rlwrld_allex_model_config = pi0_fast.Pi0FASTConfig(
+    action_dim=len(indices_for_allex_action),
+        # 0: "right_delta_x",
+        # 1: "right_delta_y",
+        # 2: "right_delta_z",
+        # 3: "right_delta_theta_x",
+        # 4: "right_delta_theta_y",
+        # 5: "right_delta_theta_z",
+        # 12: "right_Thumb_Yaw_Actuator",
+        # 13: "right_Thumb_CMC_Actuator",
+        # 14: "right_Thumb_MCP_Actuator",
+        # 15: "right_Index_Roll_Actuator",
+        # 16: "right_Index_MCP_Actuator",
+        # 17: "right_Index_PIP_Actuator",
+        # 18: "right_Middle_Roll_Actuator",
+        # 19: "right_Middle_MCP_Actuator",
+        # 20: "right_Middle_PIP_Actuator", 
+        # 21: "right_Ring_Roll_Actuator",
+        # 22: "right_Ring_MCP_Actuator",
+        # 23: "right_Ring_PIP_Actuator",
+        # 24: "right_Little_Roll_Actuator",
+        # 25: "right_Little_MCP_Actuator",
+        # 26: "right_Little_PIP_Actuator",
+    action_horizon=ACTION_CHUNK_HORIZON,
+    max_token_len=512, 
+)
+
+_pi0_fast_rlwrld_allex_model_config_for_finetune = pi0_fast.Pi0FASTConfig(
+    action_dim=len(indices_for_allex_action),
+    action_horizon=ACTION_CHUNK_HORIZON,
+    max_token_len=512,
+    paligemma_variant="gemma_2b_lora"
+)
+
+# print("\n\n================== INSTANCE max_token_len: ", _pi0_fast_rlwrld_allex_model_config.max_token_len)
+
 
 # Use `get_config` if you need to get a config by name in your code.
 _CONFIGS = [
+### david add !!!
+###########
+### For gr1
+        TrainConfig(
+        name="pi0_fast_rlwrld_for_compute_norm_stats_gr1",
+        model=_pi0_fast_rlwrld_gr1_model_config,
+        data=MyCustomLeRobotDataConfig(
+            repo_id="gr1-cube-dataset",
+            # local_files_only=True,    # 새 버젼 (2025/06/06 이후) lerobot git에서는 사용안하도록함
+            prompt_from_task=False,             ### compute_norm_stats.py 실행용
+            action_sequence_keys=('action',),  # 최종적으로 OpenPI가 사용할 action 키
+
+            # OpenPI의 표준 방식인 AssetsConfig를 사용합니다.
+            assets=AssetsConfig(
+                assets_dir="./assets/pi0_fast_rlwrld_for_compute_norm_stats_gr1",
+                asset_id="gr1-cube-dataset"
+            ),
+
+            # MyDatasetConfig에 정의한 커스텀 transform 인자들
+            repack_transforms_custom=_transforms.Group(inputs=[_transforms.RepackTransform(structure={
+                'state': 'observation.state',
+                
+                ### openpi가 기대하는 키들로 매핑 'openpi' : 'rlwrld dataset' #from gr1-cube-dataset/meta/info.json
+                'actions': 'action',
+                'prompt': 'language_instruction',
+                
+                # "image" 키 아래에 카메라별 딕셔너리를 생성하도록 중첩 구조로 변경
+                'image': {
+                    'robot0_robotview': 'observation.images.robot0_robotview',
+                    'robot0_eye_in_right_hand': 'observation.images.robot0_eye_in_right_hand',
+                    # 'robot0_eye_in_left_hand': 'observation.images.robot0_eye_in_left_hand'
+                    'sideview': 'observation.images.sideview',
+                },
+            })], outputs=()),
+
+            data_transforms_custom=_transforms.Group(inputs=[
+                _transforms_david.SelectStateIndices(indices_to_keep=indices_for_gr1_state),
+
+                _transforms_david.SelectAndMapRlwrldActions(selected_indices=indices_for_gr1_action),
+                # DeltaActions는 통계 계산 시에는 필요 없을 수 있음 (또는 7D에 대해 적용)
+            ], outputs=[]),
+            model_transforms_custom=_transforms.Group(inputs=[], outputs=[]), # compute_norm_stats를 위해 비움
+        ),
+        num_train_steps=1,
+    ),
+    TrainConfig(
+        name="pi0_fast_rlwrld_for_training_gr1",
+        model=_pi0_fast_rlwrld_gr1_model_config,
+        data=MyCustomLeRobotDataConfig(
+            repo_id="gr1-cube-dataset",
+            # local_files_only=True,    # 새 버젼 (2025/06/06 이후) lerobot git에서는 사용안하도록함
+            prompt_from_task=True,              ### train.py 실행용
+            action_sequence_keys=('action',),  # 최종적으로 OpenPI가 사용할 action 키
+
+            # OpenPI의 표준 방식인 AssetsConfig를 사용
+            assets=AssetsConfig(
+                assets_dir="./assets/pi0_fast_rlwrld_for_compute_norm_stats_gr1",
+                asset_id="gr1-cube-dataset"
+            ),
+
+            # MyDatasetConfig에 정의한 커스텀 transform 인자들
+            repack_transforms_custom=_transforms.Group(inputs=[
+                
+                ### 1. RepackTransform 입력 데이터 키 확인용 (lambda 대신 DebugPrintKeys 사용)
+                # DebugPrintKeys(
+                #     stage_message="BEFORE RepackTransform - Raw DataLoader Output",
+                #     check_keys=(
+                #         'observation.images.robot0_robotview', # info.json에 있는 대표적인 소스 이미지 키
+                #         'observation.images.sideview',
+                #         'observation.state',                   # info.json에 있는 소스 state 키
+                #         'action',                              # info.json에 있는 소스 action 키
+                #         'language_instruction'                 # info.json에 있는 소스 prompt 키
+                #     )
+                # ),
+
+                _transforms.RepackTransform(structure={
+                    'state': 'observation.state',
+                    
+                    ### openpi가 기대하는 키들로 매핑 'openpi' : 'rlwrld dataset' #from gr1-cube-dataset/meta/info.json
+                    'actions': 'action',
+                    'prompt': 'language_instruction',
+                    
+                    # "image" 키 아래에 카메라별 딕셔너리를 생성하도록 중첩 구조로 변경
+                    'image': {
+                        'robot0_robotview': 'observation.images.robot0_robotview',
+                        'robot0_eye_in_right_hand': 'observation.images.robot0_eye_in_right_hand',
+                        # 'robot0_eye_in_left_hand': 'observation.images.robot0_eye_in_left_hand'
+                        'sideview': 'observation.images.sideview',
+                    },
+                }),
+                
+                ### 2. RepackTransform 출력 데이터 키 및 'image' 키 내용 확인용 (lambda 대신 DebugPrintKeys 사용)
+                # DebugPrintKeys(
+                #     stage_message="AFTER RepackTransform - Check for 'image', 'state', etc.",
+                #     check_keys=('image', 'state', 'actions', 'prompt'), # Repack 후 기대하는 키들
+                #     check_image_dict=True # data['image'] 내부 구조와 각 카메라 이미지의 타입/shape 출력
+                #     )
+
+                ], 
+                outputs=()),
+
+                data_transforms_custom=_transforms.Group(inputs=[
+                    _transforms_david.SelectStateIndices(indices_to_keep=indices_for_gr1_state),
+
+                    _transforms_david.SelectAndMapRlwrldActions(selected_indices=indices_for_gr1_action),
+                    _transforms.DeltaActions(mask=list(_transforms.make_bool_mask( 
+                        6
+                        -(_pi0_fast_rlwrld_gr1_model_config.action_dim - 6)
+                    ))),
+                ], 
+                outputs=[
+                    _transforms.AbsoluteActions(mask=list(_transforms.make_bool_mask( 
+                        6
+                        -(_pi0_fast_rlwrld_gr1_model_config.action_dim - 6)
+                    ))),
+            ]),
+
+            model_transforms_custom=_transforms.Group(inputs=[
+                _transforms.InjectDefaultPrompt(prompt=None), 
+    
+                _transforms_david.ConvertImageDictTensorsToNumpyAndStack(),  # <--- 스태킹 기능이 포함된 변환 사용
+                _transforms.ResizeImages(224, 224),
+                _transforms_david.SqueezeImageSequenceInDict(image_dict_key="image"), # <--- 새로 추가! 출력: data['image'][cam_key]는 np.ndarray (224, 224, 3)
+                _transforms_david.CreateImageMasksDict(ordered_camera_keys=(
+                # image_mask 생성 (ordered_camera_keys는 실제 사용하는 카메라와 모델이 기대하는 순서에 맞게 조정)
+                    "robot0_robotview",
+                    "robot0_eye_in_right_hand",
+                    "sideview",
+                )),
+
+                _transforms.TokenizeFASTInputs(_tokenizer.FASTTokenizer(max_len=_pi0_fast_rlwrld_gr1_model_config.max_token_len))
+            ], 
+            outputs=[
+                _transforms.ExtractFASTActions(_tokenizer.FASTTokenizer(max_len=_pi0_fast_rlwrld_gr1_model_config.max_token_len),
+                    action_horizon=_pi0_fast_rlwrld_gr1_model_config.action_horizon,
+                    action_dim=_pi0_fast_rlwrld_gr1_model_config.action_dim
+                ),
+            ]),
+        ),
+        
+        # Note that we load the pi0-FAST base model checkpoint here.
+        weight_loader=weight_loaders.CheckpointWeightLoader("s3://openpi-assets/checkpoints/pi0_fast_base/params"),
+        num_train_steps=30_000,
+    ),
+    TrainConfig(
+        name="pi0_fast_rlwrld_for_finetune_training_gr1",
+        model=_pi0_fast_rlwrld_gr1_model_config_for_finetune,
+        data=MyCustomLeRobotDataConfig(
+            repo_id="gr1-cube-dataset",
+            # local_files_only=True,    # 새 버젼 (2025/06/06 이후) lerobot git에서는 사용안하도록함
+            prompt_from_task=True,              ### train.py 실행용
+            action_sequence_keys=('action',),  # 최종적으로 OpenPI가 사용할 action 키
+
+            # OpenPI의 표준 방식인 AssetsConfig를 사용합니다.
+            assets=AssetsConfig(
+                assets_dir="./assets/pi0_fast_rlwrld_for_compute_norm_stats_gr1",
+                asset_id="gr1-cube-dataset"
+            ),
+
+            # MyDatasetConfig에 정의한 커스텀 transform 인자들
+            repack_transforms_custom=_transforms.Group(inputs=[
+                _transforms.RepackTransform(structure={
+                    'state': 'observation.state',
+                
+                    ### openpi가 기대하는 키들로 매핑 'openpi' : 'rlwrld dataset' #from gr1-cube-dataset/meta/info.json
+                    'actions': 'action',
+                    'prompt': 'language_instruction',
+                    
+                    # "image" 키 아래에 카메라별 딕셔너리를 생성하도록 중첩 구조로 변경
+                    'image': {
+                        'robot0_robotview': 'observation.images.robot0_robotview',
+                        'robot0_eye_in_right_hand': 'observation.images.robot0_eye_in_right_hand',
+                        # 'robot0_eye_in_left_hand': 'observation.images.robot0_eye_in_left_hand'
+                        'sideview': 'observation.images.sideview',
+                    },
+                }),], 
+                outputs=()),
+
+                data_transforms_custom=_transforms.Group(inputs=[
+                    _transforms_david.SelectStateIndices(indices_to_keep=indices_for_gr1_state),
+
+                    _transforms_david.SelectAndMapRlwrldActions(selected_indices=indices_for_gr1_action),
+                    _transforms.DeltaActions(mask=list(_transforms.make_bool_mask( 
+                        6
+                        -(_pi0_fast_rlwrld_gr1_model_config.action_dim - 6)
+                    ))),
+                ], 
+                outputs=[
+                    _transforms.AbsoluteActions(mask=list(_transforms.make_bool_mask( 
+                        6
+                        -(_pi0_fast_rlwrld_gr1_model_config.action_dim - 6)
+                    ))),
+            ]),
+
+            model_transforms_custom=_transforms.Group(inputs=[
+                _transforms.InjectDefaultPrompt(prompt=None), 
+    
+                _transforms_david.ConvertImageDictTensorsToNumpyAndStack(),  # <--- 스태킹 기능이 포함된 변환 사용
+                _transforms.ResizeImages(224, 224),
+                _transforms_david.SqueezeImageSequenceInDict(image_dict_key="image"), # <--- 새로 추가! 출력: data['image'][cam_key]는 np.ndarray (224, 224, 3)
+                _transforms_david.CreateImageMasksDict(ordered_camera_keys=(
+                # image_mask 생성 (ordered_camera_keys는 실제 사용하는 카메라와 모델이 기대하는 순서에 맞게 조정)
+                    "robot0_robotview",
+                    "robot0_eye_in_right_hand",
+                    "sideview",
+                )),
+
+                _transforms.TokenizeFASTInputs(_tokenizer.FASTTokenizer(max_len=_pi0_fast_rlwrld_gr1_model_config.max_token_len))
+            ], 
+            outputs=[
+                _transforms.ExtractFASTActions(_tokenizer.FASTTokenizer(max_len=_pi0_fast_rlwrld_gr1_model_config.max_token_len),
+                    action_horizon=_pi0_fast_rlwrld_gr1_model_config.action_horizon,
+                    action_dim=_pi0_fast_rlwrld_gr1_model_config.action_dim # 12
+                ),
+            ]),
+        ),
+        
+        # Note that we load the pi0-FAST base model checkpoint here.
+        weight_loader=weight_loaders.CheckpointWeightLoader("s3://openpi-assets/checkpoints/pi0_fast_base/params"),
+        num_train_steps=30_000,
+        # Again, make sure to match the model config above when extracting the freeze filter
+        # that specifies which parameters should be frozen during LoRA finetuning.
+        freeze_filter=pi0_fast.Pi0FASTConfig(
+            action_dim=_pi0_fast_rlwrld_gr1_model_config_for_finetune.action_dim, 
+            action_horizon=_pi0_fast_rlwrld_gr1_model_config_for_finetune.action_horizon, 
+            max_token_len=_pi0_fast_rlwrld_gr1_model_config_for_finetune.max_token_len, 
+            paligemma_variant="gemma_2b_lora"
+        ).get_freeze_filter(),
+        # Turn off EMA for LoRA finetuning.
+        ema_decay=None,
+    ),
+    TrainConfig(    ### only for inference
+        name="pi0_fast_rlwrld_for_training_gr1_for_inference",
+        model=_pi0_fast_rlwrld_gr1_model_config,
+        data=MyCustomLeRobotDataConfig(
+            repo_id="gr1-cube-dataset",
+            # local_files_only=True,    # 새 버젼 (2025/06/06 이후) lerobot git에서는 사용안하도록함
+            prompt_from_task=False,              ### train.py 실행용
+            action_sequence_keys=('action',),  # 최종적으로 OpenPI가 사용할 action 키
+
+            # MyDatasetConfig에 정의한 커스텀 transform 인자들
+            repack_transforms_custom=_transforms.Group(),
+
+            data_transforms_custom=_transforms.Group(inputs=[], 
+                outputs=[
+                    _transforms.AbsoluteActions(mask=list(_transforms.make_bool_mask( 
+                        6
+                        -(_pi0_fast_rlwrld_gr1_model_config.action_dim - 6)
+                    ))),
+            ]),
+
+            model_transforms_custom=_transforms.Group(inputs=[
+                _transforms.InjectDefaultPrompt(prompt=None), 
+    
+                _transforms_david.ConvertImageDictTensorsToNumpyAndStack(),  # <--- 스태킹 기능이 포함된 변환 사용
+                _transforms.ResizeImages(224, 224),
+                _transforms_david.SqueezeImageSequenceInDict(image_dict_key="image"), # <--- 새로 추가! 출력: data['image'][cam_key]는 np.ndarray (224, 224, 3)
+                _transforms_david.CreateImageMasksDict(ordered_camera_keys=(
+                # image_mask 생성 (ordered_camera_keys는 실제 사용하는 카메라와 모델이 기대하는 순서에 맞게 조정)
+                    "robot0_robotview",
+                    "robot0_eye_in_right_hand",
+                    "sideview",
+                )),
+
+                _transforms.TokenizeFASTInputs(_tokenizer.FASTTokenizer(max_len=_pi0_fast_rlwrld_gr1_model_config.max_token_len))
+            ], 
+            outputs=[
+                _transforms.ExtractFASTActions(_tokenizer.FASTTokenizer(max_len=_pi0_fast_rlwrld_gr1_model_config.max_token_len),
+                    action_horizon=_pi0_fast_rlwrld_gr1_model_config.action_horizon,
+                    action_dim=_pi0_fast_rlwrld_gr1_model_config.action_dim
+                ),
+            ]),
+        ),
+    ),
+#############
+### For Allex
+    TrainConfig(
+        name="pi0_fast_rlwrld_for_compute_norm_stats_allex",
+        model=_pi0_fast_rlwrld_allex_model_config,
+        data=MyCustomLeRobotDataConfig(
+            repo_id="allex-cube-dataset",
+            # local_files_only=True,    # 새 버젼 (2025/06/06 이후) lerobot git에서는 사용안하도록함
+            prompt_from_task=False,             ### compute_norm_stats.py 실행용
+            action_sequence_keys=('action',),  # 최종적으로 OpenPI가 사용할 action 키
+
+            # OpenPI의 표준 방식인 AssetsConfig를 사용합니다.
+            assets=AssetsConfig(
+                assets_dir="./assets/pi0_fast_rlwrld_for_compute_norm_stats_allex",
+                asset_id="allex-cube-dataset"
+            ),
+
+            # MyDatasetConfig에 정의한 커스텀 transform 인자들
+            repack_transforms_custom=_transforms.Group(inputs=[_transforms.RepackTransform(structure={
+                'state': 'observation.state',
+                
+                ### openpi가 기대하는 키들로 매핑 'openpi' : 'rlwrld dataset' #from allex-cube-dataset/meta/info.json
+                'actions': 'action',
+                'prompt': 'language_instruction',
+                
+                # "image" 키 아래에 카메라별 딕셔너리를 생성하도록 중첩 구조로 변경
+                'image': {
+                    'robot0_robotview': 'observation.images.robot0_robotview',
+                    # 'robot0_eye_in_right_hand': 'observation.images.robot0_eye_in_right_hand',
+                    # 'robot0_eye_in_left_hand': 'observation.images.robot0_eye_in_left_hand'
+                    'sideview': 'observation.images.sideview',
+                },
+            })], outputs=()),
+
+            data_transforms_custom=_transforms.Group(inputs=[
+                _transforms_david.SelectStateIndices(indices_to_keep=indices_for_allex_state),
+
+                _transforms_david.SelectAndMapRlwrldActions(selected_indices=indices_for_allex_action),
+                # DeltaActions는 통계 계산 시에는 필요 없을 수 있음 (또는 7D에 대해 적용)
+            ], outputs=[]),
+            model_transforms_custom=_transforms.Group(inputs=[], outputs=[]), # compute_norm_stats를 위해 비움
+        ),
+        num_train_steps=1,
+    ),
+    TrainConfig(
+        name="pi0_fast_rlwrld_for_training_allex",
+        model=_pi0_fast_rlwrld_allex_model_config,
+        data=MyCustomLeRobotDataConfig(
+            repo_id="allex-cube-dataset",
+            # local_files_only=True,    # 새 버젼 (2025/06/06 이후) lerobot git에서는 사용안하도록함
+            prompt_from_task=True,              ### train.py 실행용
+            action_sequence_keys=('action',),  # 최종적으로 OpenPI가 사용할 action 키
+
+            # OpenPI의 표준 방식인 AssetsConfig를 사용합니다.
+            assets=AssetsConfig(
+                assets_dir="./assets/pi0_fast_rlwrld_for_compute_norm_stats_allex",
+                asset_id="allex-cube-dataset"
+            ),
+
+            # MyDatasetConfig에 정의한 커스텀 transform 인자들
+            repack_transforms_custom=_transforms.Group(inputs=[
+                _transforms.RepackTransform(structure={
+                    'state': 'observation.state',
+                    
+                    ### openpi가 기대하는 키들로 매핑 'openpi' : 'rlwrld dataset' #from allex-cube-dataset/meta/info.json
+                    'actions': 'action',
+                    'prompt': 'language_instruction',
+                    
+                    # "image" 키 아래에 카메라별 딕셔너리를 생성하도록 중첩 구조로 변경
+                    'image': {
+                        'robot0_robotview': 'observation.images.robot0_robotview',
+                        'sideview': 'observation.images.sideview',
+                    },
+                }),], 
+                outputs=()),
+
+                data_transforms_custom=_transforms.Group(inputs=[
+                    _transforms_david.SelectStateIndices(indices_to_keep=indices_for_allex_state),
+
+                    _transforms_david.SelectAndMapRlwrldActions(selected_indices=indices_for_allex_action),
+                    _transforms.DeltaActions(mask=list(_transforms.make_bool_mask( 
+                        6,
+                        -(_pi0_fast_rlwrld_allex_model_config.action_dim - 6)
+                    ))),
+                ], 
+                outputs=[
+                    _transforms.AbsoluteActions(mask=list(_transforms.make_bool_mask( 
+                        6,
+                        -(_pi0_fast_rlwrld_allex_model_config.action_dim - 6)
+                    ))),
+            ]),
+
+            model_transforms_custom=_transforms.Group(inputs=[
+                _transforms.InjectDefaultPrompt(prompt=None), 
+    
+                _transforms_david.ConvertImageDictTensorsToNumpyAndStack(),  # <--- 스태킹 기능이 포함된 변환 사용
+                _transforms.ResizeImages(224, 224),
+                _transforms_david.SqueezeImageSequenceInDict(image_dict_key="image"), # <--- 새로 추가! 출력: data['image'][cam_key]는 np.ndarray (224, 224, 3)
+                _transforms_david.CreateImageMasksDict(ordered_camera_keys=(
+                    # image_mask 생성 (ordered_camera_keys는 실제 사용하는 카메라와 모델이 기대하는 순서에 맞게 조정)
+                    "robot0_robotview",
+                    "sideview",
+                    # "robot0_eye_in_right_hand",
+                    # "robot0_eye_in_left_hand" # 만약 이 카메라를 사용하고 Repack에서 추가했다면 포함
+                    # 사용하지 않거나 순서가 다른 카메라는 이 튜플에서 조정/제외합니다.
+                    # 이 튜플의 길이가 image_mask의 길이가 됩니다.
+                )),
+
+                _transforms.TokenizeFASTInputs(_tokenizer.FASTTokenizer(max_len=_pi0_fast_rlwrld_allex_model_config.max_token_len))
+            ], 
+            outputs=[
+                _transforms.ExtractFASTActions(_tokenizer.FASTTokenizer(max_len=_pi0_fast_rlwrld_allex_model_config.max_token_len),
+                    action_horizon=_pi0_fast_rlwrld_allex_model_config.action_horizon,
+                    action_dim=_pi0_fast_rlwrld_allex_model_config.action_dim
+                ),
+            ]),
+        ),
+        
+        # Note that we load the pi0-FAST base model checkpoint here.
+        weight_loader=weight_loaders.CheckpointWeightLoader("s3://openpi-assets/checkpoints/pi0_fast_base/params"),
+        num_train_steps=30_000,
+    ),
+    TrainConfig(
+        name="pi0_fast_rlwrld_for_finetune_training_allex",
+        model=_pi0_fast_rlwrld_allex_model_config_for_finetune,
+        data=MyCustomLeRobotDataConfig(
+            repo_id="allex-cube-dataset",
+            # local_files_only=True,    # 새 버젼 (2025/06/06 이후) lerobot git에서는 사용안하도록함
+            prompt_from_task=True,              ### train.py 실행용
+            action_sequence_keys=('action',),  # 최종적으로 OpenPI가 사용할 action 키
+            
+            # OpenPI의 표준 방식인 AssetsConfig를 사용합니다.
+            assets=AssetsConfig(
+                assets_dir="./assets/pi0_fast_rlwrld_for_compute_norm_stats_allex",
+                asset_id="allex-cube-dataset"
+            ),
+
+            # MyDatasetConfig에 정의한 커스텀 transform 인자들
+            repack_transforms_custom=_transforms.Group(inputs=[
+                _transforms.RepackTransform(structure={
+                    'state': 'observation.state',
+                    
+                    ### openpi가 기대하는 키들로 매핑 'openpi' : 'rlwrld dataset' #from allex-cube-dataset/meta/info.json
+                    'actions': 'action',
+                    'prompt': 'language_instruction',
+                    
+                    # "image" 키 아래에 카메라별 딕셔너리를 생성하도록 중첩 구조로 변경
+                    'image': {
+                        'robot0_robotview': 'observation.images.robot0_robotview',
+                        # 'robot0_eye_in_right_hand': 'observation.images.robot0_eye_in_right_hand',
+                        # 'robot0_eye_in_left_hand': 'observation.images.robot0_eye_in_left_hand'
+                        'sideview': 'observation.images.sideview',
+                    },
+                }),], 
+                outputs=()),
+
+                data_transforms_custom=_transforms.Group(inputs=[
+                    _transforms_david.SelectStateIndices(indices_to_keep=indices_for_allex_state),
+
+                    _transforms_david.SelectAndMapRlwrldActions(selected_indices=indices_for_allex_action),
+                    _transforms.DeltaActions(mask=list(_transforms.make_bool_mask( 
+                        6,
+                        -(_pi0_fast_rlwrld_allex_model_config.action_dim - 6)
+                    ))),
+                ], 
+                outputs=[
+                    _transforms.AbsoluteActions(mask=list(_transforms.make_bool_mask( 
+                        6,
+                        -(_pi0_fast_rlwrld_allex_model_config.action_dim - 6)
+                    ))),
+            ]),
+
+            model_transforms_custom=_transforms.Group(inputs=[
+                _transforms.InjectDefaultPrompt(prompt=None), 
+    
+                _transforms_david.ConvertImageDictTensorsToNumpyAndStack(),  # <--- 스태킹 기능이 포함된 변환 사용
+                _transforms.ResizeImages(224, 224),
+                _transforms_david.SqueezeImageSequenceInDict(image_dict_key="image"), # <--- 새로 추가! 출력: data['image'][cam_key]는 np.ndarray (224, 224, 3)
+                _transforms_david.CreateImageMasksDict(ordered_camera_keys=(
+                # image_mask 생성 (ordered_camera_keys는 실제 사용하는 카메라와 모델이 기대하는 순서에 맞게 조정)
+                    "robot0_robotview",
+                    "sideview",
+                    # "robot0_eye_in_right_hand",
+                    # "robot0_eye_in_left_hand" # 만약 이 카메라를 사용하고 Repack에서 추가했다면 포함
+                    # 사용하지 않거나 순서가 다른 카메라는 이 튜플에서 조정/제외합니다.
+                    # 이 튜플의 길이가 image_mask의 길이가 됩니다.
+                )),
+
+                _transforms.TokenizeFASTInputs(_tokenizer.FASTTokenizer(max_len=_pi0_fast_rlwrld_allex_model_config_for_finetune.max_token_len)),
+            ], 
+            outputs=[
+                _transforms.ExtractFASTActions(_tokenizer.FASTTokenizer(max_len=_pi0_fast_rlwrld_allex_model_config_for_finetune.max_token_len),
+                    action_horizon=_pi0_fast_rlwrld_allex_model_config_for_finetune.action_horizon,
+                    action_dim=_pi0_fast_rlwrld_allex_model_config_for_finetune.action_dim # 12
+                ),
+            ]),
+        ),
+        
+        # Note that we load the pi0-FAST base model checkpoint here.
+        weight_loader=weight_loaders.CheckpointWeightLoader("s3://openpi-assets/checkpoints/pi0_fast_base/params"),
+        num_train_steps=30_000,
+        # Again, make sure to match the model config above when extracting the freeze filter
+        # that specifies which parameters should be frozen during LoRA finetuning.
+        freeze_filter=pi0_fast.Pi0FASTConfig(
+            action_dim=_pi0_fast_rlwrld_allex_model_config_for_finetune.action_dim, 
+            action_horizon=_pi0_fast_rlwrld_allex_model_config_for_finetune.action_horizon, 
+            max_token_len=_pi0_fast_rlwrld_allex_model_config_for_finetune.max_token_len, 
+            paligemma_variant="gemma_2b_lora"
+        ).get_freeze_filter(),
+        # Turn off EMA for LoRA finetuning.
+        ema_decay=None,
+    ),
+    
+    TrainConfig(
+        name="pi0_fast_rlwrld_for_training_allex_for_inference",
+        model=_pi0_fast_rlwrld_allex_model_config,
+        data=MyCustomLeRobotDataConfig(
+            repo_id="allex-cube-dataset",
+            # local_files_only=True,    # 새 버젼 (2025/06/06 이후) lerobot git에서는 사용안하도록함
+            prompt_from_task=False,              ### train.py 실행용
+            action_sequence_keys=('action',),  # 최종적으로 OpenPI가 사용할 action 키
+
+            # MyDatasetConfig에 정의한 커스텀 transform 인자들
+            repack_transforms_custom=_transforms.Group(),
+
+                data_transforms_custom=_transforms.Group(inputs=[], 
+                outputs=[
+                    _transforms.AbsoluteActions(mask=list(_transforms.make_bool_mask( 
+                        6,
+                        -(_pi0_fast_rlwrld_allex_model_config.action_dim - 6)
+                    ))),
+            ]),
+
+            model_transforms_custom=_transforms.Group(inputs=[
+                _transforms.InjectDefaultPrompt(prompt=None), 
+    
+                _transforms_david.ConvertImageDictTensorsToNumpyAndStack(),  # <--- 스태킹 기능이 포함된 변환 사용
+                _transforms.ResizeImages(224, 224),
+                _transforms_david.SqueezeImageSequenceInDict(image_dict_key="image"), # <--- 새로 추가! 출력: data['image'][cam_key]는 np.ndarray (224, 224, 3)
+                _transforms_david.CreateImageMasksDict(ordered_camera_keys=(
+                    # image_mask 생성 (ordered_camera_keys는 실제 사용하는 카메라와 모델이 기대하는 순서에 맞게 조정)
+                    "robot0_robotview",
+                    "sideview",
+                    # "robot0_eye_in_right_hand",
+                    # "robot0_eye_in_left_hand" # 만약 이 카메라를 사용하고 Repack에서 추가했다면 포함
+                    # 사용하지 않거나 순서가 다른 카메라는 이 튜플에서 조정/제외합니다.
+                    # 이 튜플의 길이가 image_mask의 길이가 됩니다.
+                )),
+
+                _transforms.TokenizeFASTInputs(_tokenizer.FASTTokenizer(max_len=_pi0_fast_rlwrld_allex_model_config.max_token_len))
+            ], 
+            outputs=[
+                _transforms.ExtractFASTActions(_tokenizer.FASTTokenizer(max_len=_pi0_fast_rlwrld_allex_model_config.max_token_len),
+                    action_horizon=_pi0_fast_rlwrld_allex_model_config.action_horizon,
+                    action_dim=_pi0_fast_rlwrld_allex_model_config.action_dim
+                ),
+            ]),
+        ),
+    ),
+### david add !!!
     #
     # Inference Aloha configs.
     #
@@ -491,7 +1158,7 @@ _CONFIGS = [
         data=LeRobotLiberoDataConfig(
             repo_id="physical-intelligence/libero",
             base_config=DataConfig(
-                local_files_only=False,  # Set to True for local-only datasets.
+                # local_files_only=False,  # Set to True for local-only datasets.
                 # This flag determines whether we load the prompt (i.e. the task instruction) from the
                 # ``task`` field in the LeRobot dataset. If set to True, the prompt will show up in
                 # a field called ``prompt`` in the input dict. The recommended setting is True.
@@ -512,7 +1179,7 @@ _CONFIGS = [
         data=LeRobotLiberoDataConfig(
             repo_id="physical-intelligence/libero",
             base_config=DataConfig(
-                local_files_only=False,  # Set to True for local-only datasets.
+                # local_files_only=False,  # Set to True for local-only datasets.
                 prompt_from_task=True,
             ),
         ),
@@ -544,7 +1211,7 @@ _CONFIGS = [
         data=LeRobotLiberoDataConfig(
             repo_id="physical-intelligence/libero",
             base_config=DataConfig(
-                local_files_only=False,  # Set to True for local-only datasets.
+                # local_files_only=False,  # Set to True for local-only datasets.
                 prompt_from_task=True,
             ),
         ),
@@ -562,7 +1229,7 @@ _CONFIGS = [
         data=LeRobotLiberoDataConfig(
             repo_id="physical-intelligence/libero",
             base_config=DataConfig(
-                local_files_only=False,  # Set to True for local-only datasets.
+                # local_files_only=False,  # Set to True for local-only datasets.
                 prompt_from_task=True,
             ),
         ),
@@ -607,7 +1274,7 @@ _CONFIGS = [
                 ]
             ),
             base_config=DataConfig(
-                local_files_only=False,  # Set to True for local-only datasets.
+                # local_files_only=False,  # Set to True for local-only datasets.
             ),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("s3://openpi-assets/checkpoints/pi0_base/params"),

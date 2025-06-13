@@ -40,7 +40,8 @@ def create_dataset(config: _config.TrainConfig) -> tuple[_config.DataConfig, _da
 def main(config_name: str, max_frames: int | None = None):
     config = _config.get_config(config_name)
     data_config, dataset = create_dataset(config)
-
+    print(f"++++++ Number of frames: {len(dataset)}")
+    
     num_frames = len(dataset)
     shuffle = False
 
@@ -67,7 +68,13 @@ def main(config_name: str, max_frames: int | None = None):
     norm_stats = {key: stats.get_statistics() for key, stats in stats.items()}
 
     output_path = config.assets_dirs / data_config.repo_id
+    print("---------------------------------------------------")
+    print("---------------------------------------------------")
+    print(config.assets_dirs, "       |        ", data_config.repo_id)
     print(f"Writing stats to: {output_path}")
+    print("---------------------------------------------------")
+    print("---------------------------------------------------")
+
     normalize.save(output_path, norm_stats)
 
 
