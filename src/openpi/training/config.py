@@ -38,8 +38,11 @@ import numpy as np
 import os
 
 ACTION_CHUNK_HORIZON = 50
-BATCH_SIZE = 16
-CHECKPOINT_BASE_DIR  = "./checkpoints/chunk_50"
+BATCH_SIZE = 24
+MAX_TOKEN_LEN = 384
+TRAIN_STEP = 50_000
+# CHECKPOINT_BASE_DIR  = "./checkpoints/chunk_50"
+CHECKPOINT_BASE_DIR  = "./checkpoints"
 ### david add !!!
 
 @dataclasses.dataclass(frozen=True)
@@ -411,7 +414,7 @@ class TrainConfig:
     # num_workers: int = 2
     num_workers: int = 8
     # Number of train steps (batches) to run.
-    num_train_steps: int = 30_000
+    num_train_steps: int = TRAIN_STEP
 
     # How often (in steps) to log training metrics.
     log_interval: int = 100
@@ -488,13 +491,13 @@ _pi0_fast_rlwrld_gr1_model_config = pi0_fast.Pi0FASTConfig(
         # 16: "right_ring_proximal_joint_drive",
         # 17: "right_pinky_proximal_joint_drive",
     action_horizon=ACTION_CHUNK_HORIZON,
-    max_token_len=512, 
+    max_token_len=MAX_TOKEN_LEN, 
 )
 
 _pi0_fast_rlwrld_gr1_model_config_for_finetune = pi0_fast.Pi0FASTConfig(
     action_dim=len(indices_for_gr1_action),  # 예: 6개의 조인트 + 6개의 그리퍼 액션\
     action_horizon=ACTION_CHUNK_HORIZON,
-    max_token_len=512,
+    max_token_len=MAX_TOKEN_LEN,
     paligemma_variant="gemma_2b_lora"
 )
 
@@ -531,13 +534,13 @@ _pi0_fast_rlwrld_allex_model_config = pi0_fast.Pi0FASTConfig(
         # 25: "right_Little_MCP_Actuator",
         # 26: "right_Little_PIP_Actuator",
     action_horizon=ACTION_CHUNK_HORIZON,
-    max_token_len=512, 
+    max_token_len=MAX_TOKEN_LEN, 
 )
 
 _pi0_fast_rlwrld_allex_model_config_for_finetune = pi0_fast.Pi0FASTConfig(
     action_dim=len(indices_for_allex_action),
     action_horizon=ACTION_CHUNK_HORIZON,
-    max_token_len=512,
+    max_token_len=MAX_TOKEN_LEN,
     paligemma_variant="gemma_2b_lora"
 )
 
@@ -546,6 +549,7 @@ _pi0_fast_rlwrld_allex_model_config_for_finetune = pi0_fast.Pi0FASTConfig(
 
 # Use `get_config` if you need to get a config by name in your code.
 _CONFIGS = [
+#################
 ### david add !!!
 ###########
 ### For gr1
@@ -688,7 +692,7 @@ _CONFIGS = [
         
         # Note that we load the pi0-FAST base model checkpoint here.
         weight_loader=weight_loaders.CheckpointWeightLoader("s3://openpi-assets/checkpoints/pi0_fast_base/params"),
-        num_train_steps=30_000,
+        num_train_steps=TRAIN_STEP,
     ),
     TrainConfig(
         name="pi0_fast_rlwrld_for_finetune_training_gr1",
@@ -765,7 +769,7 @@ _CONFIGS = [
         
         # Note that we load the pi0-FAST base model checkpoint here.
         weight_loader=weight_loaders.CheckpointWeightLoader("s3://openpi-assets/checkpoints/pi0_fast_base/params"),
-        num_train_steps=30_000,
+        num_train_steps=TRAIN_STEP,
         # Again, make sure to match the model config above when extracting the freeze filter
         # that specifies which parameters should be frozen during LoRA finetuning.
         freeze_filter=pi0_fast.Pi0FASTConfig(
@@ -940,7 +944,7 @@ _CONFIGS = [
         
         # Note that we load the pi0-FAST base model checkpoint here.
         weight_loader=weight_loaders.CheckpointWeightLoader("s3://openpi-assets/checkpoints/pi0_fast_base/params"),
-        num_train_steps=30_000,
+        num_train_steps=TRAIN_STEP,
     ),
     TrainConfig(
         name="pi0_fast_rlwrld_for_finetune_training_allex",
@@ -1020,7 +1024,7 @@ _CONFIGS = [
         
         # Note that we load the pi0-FAST base model checkpoint here.
         weight_loader=weight_loaders.CheckpointWeightLoader("s3://openpi-assets/checkpoints/pi0_fast_base/params"),
-        num_train_steps=30_000,
+        num_train_steps=TRAIN_STEP,
         # Again, make sure to match the model config above when extracting the freeze filter
         # that specifies which parameters should be frozen during LoRA finetuning.
         freeze_filter=pi0_fast.Pi0FASTConfig(
@@ -1080,6 +1084,7 @@ _CONFIGS = [
         ),
     ),
 ### david add !!!
+#################
     #
     # Inference Aloha configs.
     #
